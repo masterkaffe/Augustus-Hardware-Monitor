@@ -10,6 +10,22 @@ GRAY="\033[90m"
 
 OPENWRT="${OPENWRT:-root@192.168.10.2}"
 
+# Shared runtime state. The non-blocking flock prevents overlapping
+# instances (for example watch + a manual run) from racing on state files.
+STATE_DIR="/run/augustus-temp"
+mkdir -p "$STATE_DIR"
+
+exec 9>"$STATE_DIR/augustus-temp.lock"
+if ! flock -n 9; then
+    exit 0
+fi
+
+cleanup() {
+    [[ -n "${TMP_STATE:-}" && -e "${TMP_STATE:-}" ]] && rm -f -- "$TMP_STATE"
+    [[ -n "${NET_TMP:-}" && -e "${NET_TMP:-}" ]] && rm -f -- "$NET_TMP"
+}
+trap cleanup EXIT
+
 temp_status() {
     local value="$1"
     local warn="$2"
@@ -177,9 +193,8 @@ echo
 # STORAGE I/O
 echo -e "${BOLD}STORAGE I/O${RESET}"
 
-STATE_DIR="/run/augustus-temp"
 DISK_STATE="$STATE_DIR/disk-io.state"
-mkdir -p "$STATE_DIR"
+TMP_STATE=""
 
 NOW_MS=$(date +%s%3N)
 
@@ -193,8 +208,7 @@ if [[ -f "$DISK_STATE" ]]; then
     done < "$DISK_STATE"
 fi
 
-TMP_STATE="${DISK_STATE}.tmp"
-: > "$TMP_STATE"
+TMP_STATE=$(mktemp "$STATE_DIR/disk-io.state.tmp.XXXXXX")
 
 for path in /sys/block/*; do
     dev=$(basename "$path")
@@ -347,6 +361,7 @@ echo
 echo -e "${BOLD}NETWORK TRAFFIC / OPENWRT${RESET}"
 
 NET_STATE="$STATE_DIR/network-io.state"
+NET_TMP=""
 NET_NOW_MS=$(date +%s%3N)
 
 declare -A OLD_RX
@@ -376,8 +391,7 @@ done
 ' 2>/dev/null
 )
 
-NET_TMP="${NET_STATE}.tmp"
-: > "$NET_TMP"
+NET_TMP=$(mktemp "$STATE_DIR/network-io.state.tmp.XXXXXX")
 
 format_rate() {
     local bps="$1"
