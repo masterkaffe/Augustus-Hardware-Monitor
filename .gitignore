@@ -1,0 +1,9 @@
+# Runtime/editor files
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Local test/output files
+*.log
+*.tmp
