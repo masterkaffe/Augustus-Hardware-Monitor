@@ -1,0 +1,499 @@
+#!/usr/bin/env bash
+
+RESET="\033[0m"
+BOLD="\033[1m"
+GREEN="\033[32m"
+YELLOW="\033[33m"
+RED="\033[31m"
+CYAN="\033[36m"
+GRAY="\033[90m"
+
+OPENWRT="${OPENWRT:-root@192.168.10.2}"
+
+temp_status() {
+    local value="$1"
+    local warn="$2"
+    local crit="$3"
+
+    awk -v v="$value" -v w="$warn" -v c="$crit" 'BEGIN {
+        if (v >= c) exit 2
+        if (v >= w) exit 1
+        exit 0
+    }'
+
+    case $? in
+        0) printf "${GREEN}OK${RESET}" ;;
+        1) printf "${YELLOW}WARN${RESET}" ;;
+        2) printf "${RED}CRIT${RESET}" ;;
+    esac
+}
+
+print_temp() {
+    local name="$1"
+    local value="$2"
+    local warn="$3"
+    local crit="$4"
+
+    [[ -z "$value" ]] && return
+
+    printf "  %-34s %6.1f °C   " "$name" "$value"
+    temp_status "$value" "$warn" "$crit"
+    printf "\n"
+}
+
+print_fan() {
+    local name="$1"
+    local value="$2"
+
+    [[ -z "$value" ]] && return
+    printf "  %-34s %6.0f RPM\n" "$name" "$value"
+}
+
+bar() {
+    local percent="$1"
+    local width=20
+    local color
+
+    (( percent < 0 )) && percent=0
+    (( percent > 100 )) && percent=100
+
+    if (( percent >= 85 )); then
+        color="$RED"
+    elif (( percent >= 60 )); then
+        color="$YELLOW"
+    else
+        color="$GREEN"
+    fi
+
+    local filled=$(( percent * width / 100 ))
+    local empty=$(( width - filled ))
+
+    printf "${color}["
+    for ((i=0; i<filled; i++)); do printf "█"; done
+    for ((i=0; i<empty; i++)); do printf "░"; done
+    printf "]${RESET}"
+}
+
+SENSORS="$(sensors -u 2>/dev/null)"
+
+echo -e "${BOLD}${CYAN}AUGUSTUS HARDWARE MONITOR${RESET}"
+echo "================================================================"
+echo
+
+# CPU
+echo -e "${BOLD}CPU – AMD Threadripper 3960X${RESET}"
+
+get_k10() {
+    local label="$1"
+    awk -v label="$label" '
+    /^k10temp-/ {inside=1; next}
+    inside && $0 ~ "^"label":" {
+        getline
+        print $2
+        exit
+    }' <<< "$SENSORS"
+}
+
+print_temp "CPU Tctl" "$(get_k10 Tctl)" 80 90
+print_temp "CCD 1" "$(get_k10 Tccd1)" 80 90
+print_temp "CCD 3" "$(get_k10 Tccd3)" 80 90
+print_temp "CCD 5" "$(get_k10 Tccd5)" 80 90
+print_temp "CCD 7" "$(get_k10 Tccd7)" 80 90
+
+echo
+
+# RAM
+echo -e "${BOLD}RAM${RESET}"
+
+for addr in 19 1b 1d 1f; do
+    VALUE=$(awk -v chip="jc42-i2c-1-$addr" '
+    $0 == chip { inside=1; next }
+    inside && /^temp1:/ {
+        getline
+        print $2
+        exit
+    }' <<< "$SENSORS")
+
+    print_temp "DIMM @ SMBus 0x$addr" "$VALUE" 65 75
+done
+
+echo
+
+# GPU
+echo -e "${BOLD}GPU – Intel Arc A770${RESET}"
+
+GPU=$(awk '
+/^i915-/ {inside=1; next}
+inside && /^temp1:/ {
+    getline
+    print $2
+    exit
+}' <<< "$SENSORS")
+
+print_temp "GPU" "$GPU" 80 90
+
+echo
+
+# NVMe temperatures
+echo -e "${BOLD}NVMe${RESET}"
+
+print_nvme() {
+    local pci="$1"
+    local name="$2"
+    local composite
+    local sensor2
+
+    composite=$(awk -v chip="nvme-pci-$pci" '
+    $0 == chip { inside=1; next }
+    inside && /^Composite:/ {
+        getline
+        print $2
+        exit
+    }' <<< "$SENSORS")
+
+    sensor2=$(awk -v chip="nvme-pci-$pci" '
+    $0 == chip { inside=1; next }
+    inside && /^Sensor 2:/ {
+        getline
+        print $2
+        exit
+    }' <<< "$SENSORS")
+
+    print_temp "$name" "$composite" 70 80
+
+    if [[ -n "$sensor2" ]]; then
+        print_temp "  Controller / Sensor 2" "$sensor2" 75 85
+    fi
+}
+
+print_nvme "2200" "Intel Optane 64 GB #1"
+print_nvme "2100" "Intel Optane 64 GB #2"
+print_nvme "4300" "Samsung 970 EVO Plus 250 GB"
+print_nvme "4b00" "Samsung 970 EVO Plus 2 TB #1"
+print_nvme "4c00" "Samsung 970 EVO Plus 2 TB #2"
+
+echo
+
+# STORAGE I/O
+echo -e "${BOLD}STORAGE I/O${RESET}"
+
+STATE_DIR="/run/augustus-temp"
+DISK_STATE="$STATE_DIR/disk-io.state"
+mkdir -p "$STATE_DIR"
+
+NOW_MS=$(date +%s%3N)
+
+declare -A OLD_TICKS
+declare -A OLD_TIME
+
+if [[ -f "$DISK_STATE" ]]; then
+    while read -r dev ticks timestamp; do
+        OLD_TICKS["$dev"]="$ticks"
+        OLD_TIME["$dev"]="$timestamp"
+    done < "$DISK_STATE"
+fi
+
+TMP_STATE="${DISK_STATE}.tmp"
+: > "$TMP_STATE"
+
+for path in /sys/block/*; do
+    dev=$(basename "$path")
+
+    case "$dev" in
+        loop*|ram*|zram*|dm-*|md*|zd*)
+            continue
+            ;;
+    esac
+
+    [[ -r "$path/stat" ]] || continue
+
+    ticks=$(awk '{print $10}' "$path/stat")
+    echo "$dev $ticks $NOW_MS" >> "$TMP_STATE"
+
+    old_ticks="${OLD_TICKS[$dev]}"
+    old_time="${OLD_TIME[$dev]}"
+
+    if [[ -n "$old_ticks" && -n "$old_time" ]]; then
+        delta_ticks=$(( ticks - old_ticks ))
+        delta_time=$(( NOW_MS - old_time ))
+
+        if (( delta_time > 0 )); then
+            util=$(( delta_ticks * 100 / delta_time ))
+        else
+            util=0
+        fi
+
+        (( util < 0 )) && util=0
+        (( util > 100 )) && util=100
+    else
+        util=0
+    fi
+
+    model=""
+    if [[ -r "$path/device/model" ]]; then
+        model=$(xargs < "$path/device/model")
+    fi
+
+    [[ -z "$model" ]] && model="$dev"
+
+    printf "  %-8s %-31s " "$dev" "${model:0:31}"
+    bar "$util"
+
+    if (( util >= 85 )); then
+        printf " ${RED}%3d %%${RESET}\n" "$util"
+    elif (( util >= 60 )); then
+        printf " ${YELLOW}%3d %%${RESET}\n" "$util"
+    else
+        printf " ${GREEN}%3d %%${RESET}\n" "$util"
+    fi
+done
+
+mv "$TMP_STATE" "$DISK_STATE"
+
+echo
+
+# MAINBOARD
+echo -e "${BOLD}MAINBOARD – ASRock TRX40 Creator${RESET}"
+
+NCT="$(sensors -u nct6683-isa-0a20 2>/dev/null)"
+
+get_nct_temp() {
+    local label="$1"
+    awk -v label="$label" '
+    $0 ~ "^"label":" {
+        getline
+        print $2
+        exit
+    }' <<< "$NCT"
+}
+
+print_temp "Thermistor 3"  "$(get_nct_temp 'Thermistor 3')" 70 80
+print_temp "Thermistor 14" "$(get_nct_temp 'Thermistor 14')" 70 80
+print_temp "Thermistor 15" "$(get_nct_temp 'Thermistor 15')" 70 80
+
+echo
+
+# FANS / PUMP
+echo -e "${BOLD}LÜFTER / PUMPE${RESET}"
+
+get_fan() {
+    local fan="$1"
+    awk -v fan="$fan" '
+    $0 ~ "^"fan":" {
+        getline
+        print $2
+        exit
+    }' <<< "$NCT"
+}
+
+print_fan "CPU Fan"       "$(get_fan fan1)"
+print_fan "VRM Fan"       "$(get_fan fan2)"
+print_fan "Water Pump"     "$(get_fan fan3)"
+print_fan "Top / RAM Fan"  "$(get_fan fan4)"
+print_fan "NVMe Fan"       "$(get_fan fan5)"
+print_fan "HDD Fan"        "$(get_fan fan6)"
+
+echo
+
+# OPENWRT / NETWORK TEMPERATURES
+echo -e "${BOLD}NETWORK / OPENWRT${RESET}"
+
+REMOTE_DATA=$(
+ssh -o BatchMode=yes -o ConnectTimeout=2 -o LogLevel=ERROR "$OPENWRT" '
+for h in /sys/class/hwmon/hwmon*; do
+    [ -e "$h/name" ] || continue
+
+    name=$(cat "$h/name")
+    device=$(basename "$(readlink -f "$h/device" 2>/dev/null)")
+
+    for input in "$h"/temp*_input; do
+        [ -e "$input" ] || continue
+
+        base="${input%_input}"
+        label=$(cat "${base}_label" 2>/dev/null)
+        value=$(cat "$input" 2>/dev/null)
+        crit=$(cat "${base}_crit" 2>/dev/null)
+
+        echo "$name|$device|$label|$value|$crit"
+    done
+done
+' 2>/dev/null
+)
+
+if [[ -z "$REMOTE_DATA" ]]; then
+    echo -e "  ${YELLOW}OpenWrt nicht erreichbar / SSH-Key fehlt${RESET}"
+else
+    while IFS='|' read -r type pci label raw crit; do
+        [[ -z "$raw" ]] && continue
+        value=$(awk -v x="$raw" 'BEGIN { printf "%.3f", x/1000 }')
+
+        case "$type|$pci|$label" in
+            "mlx5|0000:02:00.0|sensor0")
+                print_temp "Mellanox eth3 ASIC" "$value" 80 100 ;;
+            "mlx5|0000:02:00.0|Module1")
+                print_temp "Mellanox eth3 SFP28" "$value" 70 85 ;;
+            "mlx5|0000:04:00.0|sensor0")
+                print_temp "Mellanox eth4 ASIC" "$value" 80 100 ;;
+            "eth6|"*"|PHY Temperature")
+                print_temp "Aquantia eth6 PHY" "$value" 80 95 ;;
+            "eth6|"*"|MAC Temperature")
+                print_temp "Aquantia eth6 MAC" "$value" 80 95 ;;
+        esac
+    done <<< "$REMOTE_DATA"
+fi
+
+# NETWORK TRAFFIC / OPENWRT
+echo
+echo -e "${BOLD}NETWORK TRAFFIC / OPENWRT${RESET}"
+
+NET_STATE="$STATE_DIR/network-io.state"
+NET_NOW_MS=$(date +%s%3N)
+
+declare -A OLD_RX
+declare -A OLD_TX
+declare -A OLD_NET_TIME
+
+if [[ -f "$NET_STATE" ]]; then
+    while read -r iface rx tx timestamp; do
+        OLD_RX["$iface"]="$rx"
+        OLD_TX["$iface"]="$tx"
+        OLD_NET_TIME["$iface"]="$timestamp"
+    done < "$NET_STATE"
+fi
+
+NET_REMOTE=$(
+ssh -o BatchMode=yes -o ConnectTimeout=2 -o LogLevel=ERROR "$OPENWRT" '
+for i in eth3 eth4 eth5 eth6; do
+    [ -d "/sys/class/net/$i" ] || continue
+
+    rx=$(cat /sys/class/net/$i/statistics/rx_bytes 2>/dev/null)
+    tx=$(cat /sys/class/net/$i/statistics/tx_bytes 2>/dev/null)
+    speed=$(ethtool "$i" 2>/dev/null | awk "/Speed:/ {print \$2}")
+    link=$(ethtool "$i" 2>/dev/null | awk "/Link detected:/ {print \$3}")
+
+    echo "$i|$rx|$tx|$speed|$link"
+done
+' 2>/dev/null
+)
+
+NET_TMP="${NET_STATE}.tmp"
+: > "$NET_TMP"
+
+format_rate() {
+    local bps="$1"
+
+    awk -v x="$bps" 'BEGIN {
+        if (x >= 1000000000)
+            printf "%.2f Gbit/s", x / 1000000000
+        else if (x >= 1000000)
+            printf "%.2f Mbit/s", x / 1000000
+        else if (x >= 1000)
+            printf "%.1f Kbit/s", x / 1000
+        else
+            printf "%.0f bit/s", x
+    }'
+}
+
+print_net_bar() {
+    local label="$1"
+    local rate_bps="$2"
+    local link_bps="$3"
+
+    local percent
+    percent=$(awk -v r="$rate_bps" -v l="$link_bps" 'BEGIN {
+        if (l > 0)
+            printf "%.1f", (r * 100) / l
+        else
+            printf "0.0"
+    }')
+
+    local percent_int
+    percent_int=$(awk -v p="$percent" 'BEGIN { printf "%d", p }')
+
+    (( percent_int < 0 )) && percent_int=0
+    (( percent_int > 100 )) && percent_int=100
+
+    local rate_text
+    rate_text=$(format_rate "$rate_bps")
+
+    printf "    %-3s " "$label"
+    bar "$percent_int"
+
+    if awk -v p="$percent" 'BEGIN { exit !(p >= 85) }'; then
+        printf " ${RED}%12s  %5.1f %%${RESET}\n" "$rate_text" "$percent"
+    elif awk -v p="$percent" 'BEGIN { exit !(p >= 60) }'; then
+        printf " ${YELLOW}%12s  %5.1f %%${RESET}\n" "$rate_text" "$percent"
+    else
+        printf " ${GREEN}%12s  %5.1f %%${RESET}\n" "$rate_text" "$percent"
+    fi
+}
+
+if [[ -z "$NET_REMOTE" ]]; then
+    echo -e "  ${YELLOW}OpenWrt nicht erreichbar${RESET}"
+else
+    while IFS='|' read -r iface rx tx speed_raw link; do
+        [[ -z "$iface" ]] && continue
+
+        echo "$iface $rx $tx $NET_NOW_MS" >> "$NET_TMP"
+
+        case "$iface" in
+            eth3) netname="WAN / Init7" ;;
+            eth4) netname="Mellanox LAN" ;;
+            eth5) netname="Realtek LAN" ;;
+            eth6) netname="Aquantia 10G" ;;
+            *)    netname="$iface" ;;
+        esac
+
+        if [[ "$link" != "yes" ]]; then
+            printf "  %-5s %-22s ${RED}DOWN${RESET}\n" "$iface" "$netname"
+            continue
+        fi
+
+        speed_mbit=0
+        if [[ "$speed_raw" =~ ^([0-9]+)Mb/s$ ]]; then
+            speed_mbit="${BASH_REMATCH[1]}"
+        fi
+
+        link_bps=$(( speed_mbit * 1000000 ))
+
+        if (( speed_mbit >= 1000 )); then
+            speed_text=$(awk -v x="$speed_mbit" 'BEGIN { printf "%.0f Gbit", x/1000 }')
+        else
+            speed_text="${speed_mbit} Mbit"
+        fi
+
+        printf "  %-5s %-22s %8s  ${GREEN}UP${RESET}\n" "$iface" "$netname" "$speed_text"
+
+        old_rx="${OLD_RX[$iface]}"
+        old_tx="${OLD_TX[$iface]}"
+        old_time="${OLD_NET_TIME[$iface]}"
+
+        rx_bps=0
+        tx_bps=0
+
+        if [[ -n "$old_rx" && -n "$old_tx" && -n "$old_time" ]]; then
+            delta_time=$(( NET_NOW_MS - old_time ))
+
+            if (( delta_time > 0 )); then
+                delta_rx=$(( rx - old_rx ))
+                delta_tx=$(( tx - old_tx ))
+
+                rx_bps=$(( delta_rx * 8 * 1000 / delta_time ))
+                tx_bps=$(( delta_tx * 8 * 1000 / delta_time ))
+
+                (( rx_bps < 0 )) && rx_bps=0
+                (( tx_bps < 0 )) && tx_bps=0
+            fi
+        fi
+
+        print_net_bar "RX" "$rx_bps" "$link_bps"
+        print_net_bar "TX" "$tx_bps" "$link_bps"
+        echo
+    done <<< "$NET_REMOTE"
+fi
+
+mv "$NET_TMP" "$NET_STATE"
+
+echo
+echo "================================================================"
+printf "Aktualisiert: %s\n" "$(date '+%d.%m.%Y %H:%M:%S')"
