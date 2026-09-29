@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.1 - 2026-09-29
+
+- Fix concurrent state-file race condition that could cause `mv: cannot stat ...state.tmp`
+- Add a non-blocking `flock` so only one monitor instance updates runtime state
+- Use unique `mktemp` files for disk and network counters
+- Clean temporary state files on exit
+
+
 ## 0.1.0 - 2026-09-29
 
 Initial public version.
