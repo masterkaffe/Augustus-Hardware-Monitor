@@ -138,15 +138,107 @@ echo
 # GPU
 echo -e "${BOLD}GPU – Intel Arc A770${RESET}"
 
-GPU=$(awk '
-/^i915-/ {inside=1; next}
-inside && /^temp1:/ {
-    getline
-    print $2
-    exit
-}' <<< "$SENSORS")
+GPUHOST="${GPUHOST:-martin@192.168.10.68}"
+GPU_KEY="${GPU_KEY:-/root/.ssh/augustus-gpu-monitor}"
+GPU_STATE="$STATE_DIR/gpu-energy.state"
 
-print_temp "GPU" "$GPU" 80 90
+GPU_REMOTE=$(
+ssh -i "$GPU_KEY" \
+    -o BatchMode=yes \
+    -o ConnectTimeout=2 \
+    -o LogLevel=ERROR \
+    "$GPUHOST" '
+        temp=""
+        energy=""
+
+        for h in /sys/class/drm/card0/device/hwmon/hwmon*; do
+            [ -d "$h" ] || continue
+            [ "$(cat "$h/name" 2>/dev/null)" = "i915" ] || continue
+            [ -r "$h/temp1_input" ] && temp=$(cat "$h/temp1_input")
+            [ -r "$h/energy1_input" ] && energy=$(cat "$h/energy1_input")
+            break
+        done
+
+        top=$(timeout 2 intel_gpu_top -J -s 1000 2>/dev/null || true)
+
+        render=$(printf "%s\n" "$top" | awk '
+            /"Render\/3D"/ {inside=1; next}
+            inside && /"busy"/ {
+                gsub(/[,]/, "", $2)
+                if (($2+0) > max) max=$2+0
+                inside=0
+            }
+            END { printf "%.1f", max+0 }
+        ')
+
+        compute=$(printf "%s\n" "$top" | awk '
+            /"Compute"/ {inside=1; next}
+            inside && /"busy"/ {
+                gsub(/[,]/, "", $2)
+                if (($2+0) > max) max=$2+0
+                inside=0
+            }
+            END { printf "%.1f", max+0 }
+        ')
+
+        video=$(printf "%s\n" "$top" | awk '
+            /"Video"/ {inside=1; next}
+            inside && /"busy"/ {
+                gsub(/[,]/, "", $2)
+                if (($2+0) > max) max=$2+0
+                inside=0
+            }
+            END { printf "%.1f", max+0 }
+        ')
+
+        printf "%s|%s|%s|%s|%s\n" "$temp" "$energy" "$render" "$compute" "$video"
+    ' 2>/dev/null
+)
+
+if [[ -z "$GPU_REMOTE" ]]; then
+    echo -e "  ${YELLOW}plex / GPU nicht erreichbar${RESET}"
+else
+    IFS='|' read -r GPU_TEMP_RAW GPU_ENERGY GPU_RENDER GPU_COMPUTE GPU_VIDEO <<< "$GPU_REMOTE"
+
+    if [[ "$GPU_TEMP_RAW" =~ ^[0-9]+$ ]]; then
+        GPU_TEMP=$(awk -v x="$GPU_TEMP_RAW" 'BEGIN { printf "%.1f", x/1000 }')
+        print_temp "GPU Temperatur" "$GPU_TEMP" 80 90
+    fi
+
+    printf "  %-34s %6.1f %%\n" "Render / 3D" "${GPU_RENDER:-0}"
+    printf "  %-34s %6.1f %%\n" "Compute" "${GPU_COMPUTE:-0}"
+    printf "  %-34s %6.1f %%\n" "Video" "${GPU_VIDEO:-0}"
+
+    NOW_GPU_MS=$(date +%s%3N)
+    GPU_POWER=""
+
+    if [[ "$GPU_ENERGY" =~ ^[0-9]+$ && -f "$GPU_STATE" ]]; then
+        read -r OLD_GPU_ENERGY OLD_GPU_MS < "$GPU_STATE"
+
+        if [[ "$OLD_GPU_ENERGY" =~ ^[0-9]+$ && "$OLD_GPU_MS" =~ ^[0-9]+$ ]]; then
+            delta_e=$(( GPU_ENERGY - OLD_GPU_ENERGY ))
+            delta_t=$(( NOW_GPU_MS - OLD_GPU_MS ))
+
+            if (( delta_e >= 0 && delta_t > 0 )); then
+                GPU_POWER=$(awk -v e="$delta_e" -v t="$delta_t" 'BEGIN {
+                    # energy*_input ist in Mikro-Joule, Zeit in Millisekunden.
+                    # W = (uJ / 1e6) / (ms / 1000) = uJ / (1000 * ms)
+                    printf "%.1f", e / (1000 * t)
+                }')
+            fi
+        fi
+    fi
+
+    if [[ "$GPU_ENERGY" =~ ^[0-9]+$ ]]; then
+        printf "%s %s\n" "$GPU_ENERGY" "$NOW_GPU_MS" > "$GPU_STATE"
+    fi
+
+    if [[ -n "$GPU_POWER" ]]; then
+        printf "  %-34s %6.1f W\n" "Leistungsaufnahme" "$GPU_POWER"
+    else
+        printf "  %-34s %6s\n" "Leistungsaufnahme" "..."
+    fi
+fi
 
 echo
 
