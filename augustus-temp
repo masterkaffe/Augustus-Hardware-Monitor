@@ -161,6 +161,16 @@ done
 
 top=$(timeout 2 intel_gpu_top -J -s 1000 2>/dev/null || true)
 
+vram_util=$(nvtop -s 2>/dev/null | awk -F'"' '
+    /"mem_util"/ {
+        v=$4
+        gsub(/%/, "", v)
+        print v
+        exit
+    }
+')
+[ -n "$vram_util" ] || vram_util=0
+
 render=$(printf '%s\n' "$top" | awk '
     /"Render\/3D"/ {inside=1; next}
     inside && /"busy"/ {
@@ -191,14 +201,14 @@ video=$(printf '%s\n' "$top" | awk '
     END { printf "%.1f", max+0 }
 ')
 
-printf '%s|%s|%s|%s|%s\n' "$temp" "$energy" "$render" "$compute" "$video"
+printf '%s|%s|%s|%s|%s|%s\n' "$temp" "$energy" "$render" "$compute" "$video" "$vram_util"
 REMOTE_GPU
 )
 
 if [[ -z "$GPU_REMOTE" ]]; then
     echo -e "  ${YELLOW}plex / GPU nicht erreichbar${RESET}"
 else
-    IFS='|' read -r GPU_TEMP_RAW GPU_ENERGY GPU_RENDER GPU_COMPUTE GPU_VIDEO <<< "$GPU_REMOTE"
+    IFS='|' read -r GPU_TEMP_RAW GPU_ENERGY GPU_RENDER GPU_COMPUTE GPU_VIDEO GPU_VRAM_UTIL <<< "$GPU_REMOTE"
 
     if [[ "$GPU_TEMP_RAW" =~ ^[0-9]+$ ]]; then
         GPU_TEMP=$(awk -v x="$GPU_TEMP_RAW" 'BEGIN { printf "%.1f", x/1000 }')
@@ -231,6 +241,32 @@ else
     print_gpu_bar "Render / 3D" "${GPU_RENDER:-0}"
     print_gpu_bar "Compute" "${GPU_COMPUTE:-0}"
     print_gpu_bar "Video" "${GPU_VIDEO:-0}"
+
+    GPU_VRAM_TOTAL_GIB="${GPU_VRAM_TOTAL_GIB:-15.906}"
+    GPU_VRAM_UTIL="${GPU_VRAM_UTIL:-0}"
+    GPU_VRAM_USED_GIB=$(awk -v p="$GPU_VRAM_UTIL" -v t="$GPU_VRAM_TOTAL_GIB" 'BEGIN {
+        if (p < 0) p=0
+        if (p > 100) p=100
+        printf "%.2f", t * p / 100
+    }')
+    GPU_VRAM_PERCENT=$(awk -v p="$GPU_VRAM_UTIL" 'BEGIN {
+        if (p < 0) p=0
+        if (p > 100) p=100
+        printf "%d", p + 0.5
+    }')
+
+    printf "  %-34s " "VRAM"
+    bar "$GPU_VRAM_PERCENT"
+    if (( GPU_VRAM_PERCENT >= 85 )); then
+        printf " ${RED}%5.2f / %5.2f GiB  %3d %%${RESET}\n" \
+            "$GPU_VRAM_USED_GIB" "$GPU_VRAM_TOTAL_GIB" "$GPU_VRAM_PERCENT"
+    elif (( GPU_VRAM_PERCENT >= 60 )); then
+        printf " ${YELLOW}%5.2f / %5.2f GiB  %3d %%${RESET}\n" \
+            "$GPU_VRAM_USED_GIB" "$GPU_VRAM_TOTAL_GIB" "$GPU_VRAM_PERCENT"
+    else
+        printf " ${GREEN}%5.2f / %5.2f GiB  %3d %%${RESET}\n" \
+            "$GPU_VRAM_USED_GIB" "$GPU_VRAM_TOTAL_GIB" "$GPU_VRAM_PERCENT"
+    fi
 
     NOW_GPU_MS=$(date +%s%3N)
     GPU_POWER=""
