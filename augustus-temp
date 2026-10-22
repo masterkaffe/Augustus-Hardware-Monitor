@@ -147,52 +147,52 @@ ssh -i "$GPU_KEY" \
     -o BatchMode=yes \
     -o ConnectTimeout=2 \
     -o LogLevel=ERROR \
-    "$GPUHOST" '
-        temp=""
-        energy=""
+    "$GPUHOST" 'LC_ALL=C bash -s' 2>/dev/null <<'REMOTE_GPU'
+temp=""
+energy=""
 
-        for h in /sys/class/drm/card0/device/hwmon/hwmon*; do
-            [ -d "$h" ] || continue
-            [ "$(cat "$h/name" 2>/dev/null)" = "i915" ] || continue
-            [ -r "$h/temp1_input" ] && temp=$(cat "$h/temp1_input")
-            [ -r "$h/energy1_input" ] && energy=$(cat "$h/energy1_input")
-            break
-        done
+for h in /sys/class/drm/card0/device/hwmon/hwmon*; do
+    [ -d "$h" ] || continue
+    [ "$(cat "$h/name" 2>/dev/null)" = "i915" ] || continue
+    [ -r "$h/temp1_input" ] && temp=$(cat "$h/temp1_input")
+    [ -r "$h/energy1_input" ] && energy=$(cat "$h/energy1_input")
+    break
+done
 
-        top=$(timeout 2 intel_gpu_top -J -s 1000 2>/dev/null || true)
+top=$(timeout 2 intel_gpu_top -J -s 1000 2>/dev/null || true)
 
-        render=$(printf "%s\n" "$top" | awk '
-            /"Render\/3D"/ {inside=1; next}
-            inside && /"busy"/ {
-                gsub(/[,]/, "", $2)
-                if (($2+0) > max) max=$2+0
-                inside=0
-            }
-            END { printf "%.1f", max+0 }
-        ')
+render=$(printf '%s\n' "$top" | awk '
+    /"Render\/3D"/ {inside=1; next}
+    inside && /"busy"/ {
+        gsub(/,/, "", $2)
+        if (($2+0) > max) max=$2+0
+        inside=0
+    }
+    END { printf "%.1f", max+0 }
+')
 
-        compute=$(printf "%s\n" "$top" | awk '
-            /"Compute"/ {inside=1; next}
-            inside && /"busy"/ {
-                gsub(/[,]/, "", $2)
-                if (($2+0) > max) max=$2+0
-                inside=0
-            }
-            END { printf "%.1f", max+0 }
-        ')
+compute=$(printf '%s\n' "$top" | awk '
+    /"Compute"/ {inside=1; next}
+    inside && /"busy"/ {
+        gsub(/,/, "", $2)
+        if (($2+0) > max) max=$2+0
+        inside=0
+    }
+    END { printf "%.1f", max+0 }
+')
 
-        video=$(printf "%s\n" "$top" | awk '
-            /"Video"/ {inside=1; next}
-            inside && /"busy"/ {
-                gsub(/[,]/, "", $2)
-                if (($2+0) > max) max=$2+0
-                inside=0
-            }
-            END { printf "%.1f", max+0 }
-        ')
+video=$(printf '%s\n' "$top" | awk '
+    /"Video"/ {inside=1; next}
+    inside && /"busy"/ {
+        gsub(/,/, "", $2)
+        if (($2+0) > max) max=$2+0
+        inside=0
+    }
+    END { printf "%.1f", max+0 }
+')
 
-        printf "%s|%s|%s|%s|%s\n" "$temp" "$energy" "$render" "$compute" "$video"
-    ' 2>/dev/null
+printf '%s|%s|%s|%s|%s\n' "$temp" "$energy" "$render" "$compute" "$video"
+REMOTE_GPU
 )
 
 if [[ -z "$GPU_REMOTE" ]]; then
