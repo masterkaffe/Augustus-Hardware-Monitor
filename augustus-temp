@@ -205,9 +205,32 @@ else
         print_temp "GPU Temperatur" "$GPU_TEMP" 80 90
     fi
 
-    printf "  %-34s %6.1f %%\n" "Render / 3D" "${GPU_RENDER:-0}"
-    printf "  %-34s %6.1f %%\n" "Compute" "${GPU_COMPUTE:-0}"
-    printf "  %-34s %6.1f %%\n" "Video" "${GPU_VIDEO:-0}"
+    print_gpu_bar() {
+        local label="$1"
+        local value="${2:-0}"
+        local percent_int
+
+        percent_int=$(awk -v p="$value" 'BEGIN {
+            if (p < 0) p=0
+            if (p > 100) p=100
+            printf "%d", p + 0.5
+        }')
+
+        printf "  %-34s " "$label"
+        bar "$percent_int"
+
+        if awk -v p="$value" 'BEGIN { exit !(p >= 85) }'; then
+            printf " ${RED}%6.1f %%${RESET}\n" "$value"
+        elif awk -v p="$value" 'BEGIN { exit !(p >= 60) }'; then
+            printf " ${YELLOW}%6.1f %%${RESET}\n" "$value"
+        else
+            printf " ${GREEN}%6.1f %%${RESET}\n" "$value"
+        fi
+    }
+
+    print_gpu_bar "Render / 3D" "${GPU_RENDER:-0}"
+    print_gpu_bar "Compute" "${GPU_COMPUTE:-0}"
+    print_gpu_bar "Video" "${GPU_VIDEO:-0}"
 
     NOW_GPU_MS=$(date +%s%3N)
     GPU_POWER=""
