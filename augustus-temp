@@ -257,7 +257,32 @@ else
     fi
 
     if [[ -n "$GPU_POWER" ]]; then
-        printf "  %-34s %6.1f W\n" "Leistungsaufnahme" "$GPU_POWER"
+        GPU_POWER_LIMIT="${GPU_POWER_LIMIT:-225}"
+        GPU_POWER_PERCENT=$(awk -v p="$GPU_POWER" -v l="$GPU_POWER_LIMIT" 'BEGIN {
+            if (l <= 0) {
+                printf "0"
+                exit
+            }
+
+            v=(p*100)/l
+            if (v < 0) v=0
+            if (v > 100) v=100
+            printf "%d", v + 0.5
+        }')
+
+        printf "  %-34s " "Leistungsaufnahme"
+        bar "$GPU_POWER_PERCENT"
+
+        if (( GPU_POWER_PERCENT >= 85 )); then
+            printf " ${RED}%6.1f W / %3.0f W  %3d %%${RESET}\n" \
+                "$GPU_POWER" "$GPU_POWER_LIMIT" "$GPU_POWER_PERCENT"
+        elif (( GPU_POWER_PERCENT >= 60 )); then
+            printf " ${YELLOW}%6.1f W / %3.0f W  %3d %%${RESET}\n" \
+                "$GPU_POWER" "$GPU_POWER_LIMIT" "$GPU_POWER_PERCENT"
+        else
+            printf " ${GREEN}%6.1f W / %3.0f W  %3d %%${RESET}\n" \
+                "$GPU_POWER" "$GPU_POWER_LIMIT" "$GPU_POWER_PERCENT"
+        fi
     else
         printf "  %-34s %6s\n" "Leistungsaufnahme" "..."
     fi
