@@ -157,7 +157,7 @@ else
         GPU_VM="108"
         GPU_VM_NAME="KIPlex"
     elif qm status 129 2>/dev/null | grep -q 'status: running'; then
-        GPUHOST="martin@192.168.10.193"
+        GPUHOST="Linuxuser21@192.168.10.193"
         GPU_VM="129"
         GPU_VM_NAME="POPOSGPU"
     else
