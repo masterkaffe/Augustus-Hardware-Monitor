@@ -230,7 +230,7 @@ if [ -n "$NVTOP_BIN" ]; then
 fi
 
 render=$(printf '%s\n' "$top" | awk '
-    /"Render\/3D"/ {inside=1; next}
+    /"Render\/3D(\/[0-9]+)?"/ {inside=1; next}
     inside && /"busy"/ {
         gsub(/,/, "", $2)
         if (($2+0) > max) max=$2+0
@@ -240,7 +240,7 @@ render=$(printf '%s\n' "$top" | awk '
 ')
 
 compute=$(printf '%s\n' "$top" | awk '
-    /"Compute"/ {inside=1; next}
+    /"Compute(\/[0-9]+)?"/ {inside=1; next}
     inside && /"busy"/ {
         gsub(/,/, "", $2)
         if (($2+0) > max) max=$2+0
@@ -250,7 +250,7 @@ compute=$(printf '%s\n' "$top" | awk '
 ')
 
 video=$(printf '%s\n' "$top" | awk '
-    /"Video"/ {inside=1; next}
+    /"Video(\/[0-9]+)?"/ {inside=1; next}
     inside && /"busy"/ {
         gsub(/,/, "", $2)
         if (($2+0) > max) max=$2+0
@@ -260,7 +260,7 @@ video=$(printf '%s\n' "$top" | awk '
 ')
 
 unknown=$(printf '%s\n' "$top" | awk '
-    /"\[unknown\]"/ {inside=1; next}
+    /"\[unknown\](\/[0-9]+)?"/ {inside=1; next}
     inside && /"busy"/ {
         gsub(/,/, "", $2)
         if (($2+0) > max) max=$2+0
