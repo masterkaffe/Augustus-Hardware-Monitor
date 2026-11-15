@@ -136,12 +136,37 @@ done
 echo
 
 # GPU
-echo -e "${BOLD}GPU – Intel Arc A770${RESET}"
+if [[ -n "${GPU_VM:-}" ]]; then
+    echo -e "${BOLD}GPU – Intel Arc A770 [VM $GPU_VM $GPU_VM_NAME]${RESET}"
+else
+    echo -e "${BOLD}GPU – Intel Arc A770${RESET}"
+fi
 
-GPUHOST="${GPUHOST:-martin@192.168.10.68}"
 GPU_KEY="${GPU_KEY:-/root/.ssh/augustus-gpu-monitor}"
 GPU_STATE="$STATE_DIR/gpu-energy.state"
 
+# Arc A770 is passed through alternately to VM 108 (KIPlex) or VM 129 (POPOSGPU).
+# If GPUHOST is explicitly set, that override wins.
+GPU_VM=""
+GPU_VM_NAME=""
+if [[ -n "${GPUHOST:-}" ]]; then
+    GPU_VM_NAME="override"
+else
+    if qm status 108 2>/dev/null | grep -q 'status: running'; then
+        GPUHOST="martin@192.168.10.68"
+        GPU_VM="108"
+        GPU_VM_NAME="KIPlex"
+    elif qm status 129 2>/dev/null | grep -q 'status: running'; then
+        GPUHOST="martin@192.168.10.193"
+        GPU_VM="129"
+        GPU_VM_NAME="POPOSGPU"
+    else
+        GPUHOST=""
+    fi
+fi
+
+GPU_REMOTE=""
+if [[ -n "$GPUHOST" ]]; then
 GPU_REMOTE=$(
 ssh -i "$GPU_KEY" \
     -o BatchMode=yes \
@@ -204,9 +229,14 @@ video=$(printf '%s\n' "$top" | awk '
 printf '%s|%s|%s|%s|%s|%s\n' "$temp" "$energy" "$render" "$compute" "$video" "$vram_util"
 REMOTE_GPU
 )
+fi
 
 if [[ -z "$GPU_REMOTE" ]]; then
-    echo -e "  ${YELLOW}plex / GPU nicht erreichbar${RESET}"
+    if [[ -z "$GPUHOST" ]]; then
+        echo -e "  ${YELLOW}keine GPU-VM aktiv${RESET}"
+    else
+        echo -e "  ${YELLOW}$GPU_VM_NAME / GPU nicht erreichbar${RESET}"
+    fi
 else
     IFS='|' read -r GPU_TEMP_RAW GPU_ENERGY GPU_RENDER GPU_COMPUTE GPU_VIDEO GPU_VRAM_UTIL <<< "$GPU_REMOTE"
 
