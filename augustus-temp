@@ -433,18 +433,18 @@ if [[ "$GPU_VM" == "108" || "$GPUHOST" == "martin@192.168.10.68" ]]; then
         KI_USED=$((KI_TOTAL-KI_AVAILABLE))
         printf "  %-34s " "RAM effektiv belegt"
         bar "$((KI_USED*100/KI_TOTAL))"
-        LC_ALL=C awk -v u="$KI_USED" -v t="$KI_TOTAL" 'BEGIN {printf " %.2f / %.2f GiB\n", u/1048576, t/1048576}'
+        LC_ALL=C awk -v u="$KI_USED" -v t="$KI_TOTAL" 'BEGIN {printf " %6.2f / %5.2f GiB  %3.0f %%\n", u/1048576, t/1048576, 100*u/t}'
         printf "  %-34s " "RAM Cache (inkl. Buffer)"
-        LC_ALL=C awk -v c="$KI_CACHE" 'BEGIN {printf "%.2f GiB\n", c/1048576}'
+        LC_ALL=C awk -v c="$KI_CACHE" 'BEGIN {printf "%22s %6.2f GiB\n", "", c/1048576}'
         printf "  %-34s " "RAM verfügbar"
-        LC_ALL=C awk -v a="$KI_AVAILABLE" 'BEGIN {printf "%.2f GiB\n", a/1048576}'
+        LC_ALL=C awk -v a="$KI_AVAILABLE" 'BEGIN {printf "%22s %6.2f GiB\n", "", a/1048576}'
         printf "  %-34s " "Swap belegt"
         if (( KI_SWAP_TOTAL > 0 )); then
             KI_SWAP_USED=$((KI_SWAP_TOTAL-KI_SWAP_FREE))
             bar "$((KI_SWAP_USED*100/KI_SWAP_TOTAL))"
-            LC_ALL=C awk -v u="$KI_SWAP_USED" -v t="$KI_SWAP_TOTAL" 'BEGIN {printf " %.2f / %.2f GiB\n", u/1048576, t/1048576}'
+            LC_ALL=C awk -v u="$KI_SWAP_USED" -v t="$KI_SWAP_TOTAL" 'BEGIN {printf " %6.2f / %5.2f GiB  %3.0f %%\n", u/1048576, t/1048576, 100*u/t}'
         else
-            printf "deaktiviert\n"
+            printf "%22s deaktiviert\n" ""
         fi
     else
         echo -e "  ${YELLOW}KI-RAM nicht erreichbar / Messwerte fehlen${RESET}"
