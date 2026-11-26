@@ -407,74 +407,20 @@ fi
 
 echo
 
-# KIPlex RAM (guest metrics, not host QEMU RSS)
+# KIPlex RAM (physical guest memory including cache)
 if [[ "$GPU_VM" == "108" || "$GPUHOST" == "martin@192.168.10.68" ]]; then
     echo -e "${BOLD}KI-RAM – KIPlex [VM 108]${RESET}"
     KI_REMOTE=$(timeout 5 ssh -i "$GPU_KEY" \
         -o BatchMode=yes -o ConnectTimeout=2 -o LogLevel=ERROR \
-        "$GPUHOST" 'LC_ALL=C bash -s' 2>/dev/null <<'REMOTE_KI'
-awk '
-    /^(MemTotal|MemAvailable|MemFree|Cached|Shmem|SwapTotal|SwapFree):/ {
-        sub(/:$/, "", $1); print $1 "|" $2
-    }' /proc/meminfo
-for pid in $(pgrep -x 'llama-server|llama-bench' || true); do
-    [ -r "/proc/$pid/smaps_rollup" ] || continue
-    awk -v pid="$pid" '
-        /^(Pss|Pss_File|Pss_Anon|Pss_Shmem):/ { sub(/:$/, "", $1); a[$1]=$2 }
-        END { if ("Pss" in a) printf "LLM|%s|%d|%d|%d|%d\n", pid,a["Pss"],a["Pss_File"],a["Pss_Anon"],a["Pss_Shmem"] }
-    ' "/proc/$pid/smaps_rollup" 2>/dev/null
-done
-awk '/^full / {sub(/avg10=/,"",$2); print "PSI|" $2}' /proc/pressure/memory 2>/dev/null
-REMOTE_KI
-)
-    if [[ -z "$KI_REMOTE" ]]; then
-        echo -e "  ${YELLOW}KI-RAM nicht erreichbar / SSH-Key prüfen${RESET}"
+        "$GPUHOST" 'LC_ALL=C awk '"'"'/^MemTotal:/ {t=$2} /^MemFree:/ {f=$2; seen=1} END {if(t>0 && seen && f>=0 && f<=t) print t, f}'"'"' /proc/meminfo' 2>/dev/null)
+    read -r KI_TOTAL KI_FREE <<< "$KI_REMOTE"
+    if [[ "$KI_TOTAL" =~ ^[0-9]+$ && "$KI_FREE" =~ ^[0-9]+$ ]] && (( KI_TOTAL > 0 && KI_FREE <= KI_TOTAL )); then
+        KI_USED=$((KI_TOTAL-KI_FREE))
+        printf "  %-34s " "RAM physisch belegt"
+        bar "$((KI_USED*100/KI_TOTAL))"
+        LC_ALL=C awk -v u="$KI_USED" -v t="$KI_TOTAL" 'BEGIN {printf " %.2f GiB / %.2f GiB\n", u/1048576, t/1048576}'
     else
-        declare -A KI_MEM=()
-        KI_LLM_COUNT=0
-        KI_PSS=0
-        KI_FILE=0
-        KI_ANON=0
-        KI_SHMEM=0
-        KI_PSI=""
-        while IFS='|' read -r key a b c d e; do
-            case "$key" in
-                MemTotal|MemAvailable|MemFree|Cached|Shmem|SwapTotal|SwapFree)
-                    [[ "$a" =~ ^[0-9]+$ ]] && KI_MEM[$key]="$a" ;;
-                LLM)
-                    if [[ "$b" =~ ^[0-9]+$ && "$c" =~ ^[0-9]+$ && "$d" =~ ^[0-9]+$ && "$e" =~ ^[0-9]+$ ]]; then
-                        ((KI_LLM_COUNT+=1, KI_PSS+=b, KI_FILE+=c, KI_ANON+=d, KI_SHMEM+=e))
-                    fi ;;
-                PSI) KI_PSI="$a" ;;
-            esac
-        done <<< "$KI_REMOTE"
-        ki_gib() { awk -v n="$1" 'BEGIN {printf "%.2f GiB", n/1048576}'; }
-        ki_line() { printf "  %-34s %s\n" "$1" "$(ki_gib "$2")"; }
-        if [[ -n "${KI_MEM[MemTotal]:-}" && -n "${KI_MEM[MemAvailable]:-}" ]]; then
-            KI_TOTAL=${KI_MEM[MemTotal]}
-            KI_AVAILABLE=${KI_MEM[MemAvailable]}
-            KI_FREE=${KI_MEM[MemFree]:-0}
-            KI_USED=$((KI_TOTAL-KI_FREE))
-            printf "  %-34s " "RAM physisch belegt"
-            bar "$((KI_USED*100/KI_TOTAL))"
-            printf " %s / %s\n" "$(ki_gib "$KI_USED")" "$(ki_gib "$KI_TOTAL")"
-            printf "  %-34s " "RAM nicht verfügbar (geschätzt)"
-            bar "$(((KI_TOTAL-KI_AVAILABLE)*100/KI_TOTAL))"
-            printf " %s\n" "$(ki_gib "$((KI_TOTAL-KI_AVAILABLE))")"
-            ki_line "RAM verfügbar (inkl. Cache)" "$KI_AVAILABLE"
-            ki_line "Dateicache ohne Shmem (ca.)" "$(( ${KI_MEM[Cached]:-0} > ${KI_MEM[Shmem]:-0} ? ${KI_MEM[Cached]:-0} - ${KI_MEM[Shmem]:-0} : 0 ))"
-            ki_line "Shared Memory (systemweit)" "${KI_MEM[Shmem]:-0}"
-            ki_line "Swap belegt" "$(( ${KI_MEM[SwapTotal]:-0} - ${KI_MEM[SwapFree]:-0} ))"
-        fi
-        if (( KI_LLM_COUNT > 0 )); then
-            ki_line "LLM RAM (PSS, $KI_LLM_COUNT Prozesse)" "$KI_PSS"
-            ki_line "  davon dateibasiert (mmap)" "$KI_FILE"
-            ki_line "  davon anonym" "$KI_ANON"
-            ki_line "  davon Shared Memory" "$KI_SHMEM"
-        else
-            printf "  %-34s %s\n" "LLM RAM (PSS)" "kein messbarer Prozess"
-        fi
-        [[ -n "$KI_PSI" ]] && printf "  %-34s %s %%\n" "Speicherdruck PSI full (10 s)" "$KI_PSI"
+        echo -e "  ${YELLOW}KI-RAM nicht erreichbar${RESET}"
     fi
     echo
 fi
