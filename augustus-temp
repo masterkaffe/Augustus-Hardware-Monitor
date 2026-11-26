@@ -407,20 +407,47 @@ fi
 
 echo
 
-# KIPlex RAM (physical guest memory including cache)
+# KIPlex RAM (guest memory pressure, not physical occupancy)
 if [[ "$GPU_VM" == "108" || "$GPUHOST" == "martin@192.168.10.68" ]]; then
     echo -e "${BOLD}KI-RAM – KIPlex [VM 108]${RESET}"
     KI_REMOTE=$(timeout 5 ssh -i "$GPU_KEY" \
         -o BatchMode=yes -o ConnectTimeout=2 -o LogLevel=ERROR \
-        "$GPUHOST" 'LC_ALL=C awk '"'"'/^MemTotal:/ {t=$2} /^MemFree:/ {f=$2; seen=1} END {if(t>0 && seen && f>=0 && f<=t) print t, f}'"'"' /proc/meminfo' 2>/dev/null)
-    read -r KI_TOTAL KI_FREE <<< "$KI_REMOTE"
-    if [[ "$KI_TOTAL" =~ ^[0-9]+$ && "$KI_FREE" =~ ^[0-9]+$ ]] && (( KI_TOTAL > 0 && KI_FREE <= KI_TOTAL )); then
-        KI_USED=$((KI_TOTAL-KI_FREE))
-        printf "  %-34s " "RAM physisch belegt"
+        "$GPUHOST" 'LC_ALL=C cat /proc/meminfo' 2>/dev/null)
+    KI_VALUES=$(awk '
+        /^MemTotal:/ {t=$2}
+        /^MemAvailable:/ {a=$2; seen=1}
+        /^Buffers:/ {b=$2}
+        /^Cached:/ {c=$2}
+        /^SReclaimable:/ {r=$2}
+        /^Shmem:/ {h=$2}
+        /^SwapTotal:/ {st=$2; sts=1}
+        /^SwapFree:/ {sf=$2; sfs=1}
+        END {
+            cache=b+c+r-h
+            if(cache<0) cache=0
+            if(t>0 && seen && a>=0 && a<=t && sts && sfs && sf>=0 && sf<=st)
+                printf "%.0f %.0f %.0f %.0f %.0f\n", t,a,cache,st,sf
+        }' <<< "$KI_REMOTE")
+    read -r KI_TOTAL KI_AVAILABLE KI_CACHE KI_SWAP_TOTAL KI_SWAP_FREE <<< "$KI_VALUES"
+    if [[ "$KI_TOTAL" =~ ^[0-9]+$ && "$KI_AVAILABLE" =~ ^[0-9]+$ ]] && (( KI_TOTAL > 0 && KI_AVAILABLE <= KI_TOTAL )); then
+        KI_USED=$((KI_TOTAL-KI_AVAILABLE))
+        printf "  %-34s " "RAM effektiv belegt"
         bar "$((KI_USED*100/KI_TOTAL))"
-        LC_ALL=C awk -v u="$KI_USED" -v t="$KI_TOTAL" 'BEGIN {printf " %.2f GiB / %.2f GiB\n", u/1048576, t/1048576}'
+        LC_ALL=C awk -v u="$KI_USED" -v t="$KI_TOTAL" 'BEGIN {printf " %.2f / %.2f GiB\n", u/1048576, t/1048576}'
+        printf "  %-34s " "RAM Cache (inkl. Buffer)"
+        LC_ALL=C awk -v c="$KI_CACHE" 'BEGIN {printf "%.2f GiB\n", c/1048576}'
+        printf "  %-34s " "RAM verfügbar"
+        LC_ALL=C awk -v a="$KI_AVAILABLE" 'BEGIN {printf "%.2f GiB\n", a/1048576}'
+        printf "  %-34s " "Swap belegt"
+        if (( KI_SWAP_TOTAL > 0 )); then
+            KI_SWAP_USED=$((KI_SWAP_TOTAL-KI_SWAP_FREE))
+            bar "$((KI_SWAP_USED*100/KI_SWAP_TOTAL))"
+            LC_ALL=C awk -v u="$KI_SWAP_USED" -v t="$KI_SWAP_TOTAL" 'BEGIN {printf " %.2f / %.2f GiB\n", u/1048576, t/1048576}'
+        else
+            printf "deaktiviert\n"
+        fi
     else
-        echo -e "  ${YELLOW}KI-RAM nicht erreichbar${RESET}"
+        echo -e "  ${YELLOW}KI-RAM nicht erreichbar / Messwerte fehlen${RESET}"
     fi
     echo
 fi
