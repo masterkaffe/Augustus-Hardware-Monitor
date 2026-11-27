@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 022
+
+STATE_DIR="/run/augustus-temp"
+SNAPSHOT="$STATE_DIR/snapshot"
+mkdir -p "$STATE_DIR"
+TMP=$(mktemp "$STATE_DIR/snapshot.tmp.XXXXXX")
+trap 'rm -f -- "$TMP"' EXIT
+
+# The timeout kills the entire collection if an SSH command hangs.
+# Do not publish partial/empty results.
+if ! timeout --signal=TERM --kill-after=2s 30s \
+    /usr/local/bin/augustus-temp-collect > "$TMP"; then
+    logger -t augustus-temp "Collection timed out or failed; previous snapshot retained"
+    exit 1
+fi
+
+if ! grep -q 'AUGUSTUS HARDWARE MONITOR' "$TMP" ||
+   ! grep -q 'Aktualisiert:' "$TMP"; then
+    logger -t augustus-temp "Invalid/empty collection; previous snapshot retained"
+    exit 1
+fi
+
+chmod 0644 "$TMP"
+mv -f "$TMP" "$SNAPSHOT"
