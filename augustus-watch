@@ -1,4 +1,36 @@
 #!/usr/bin/env bash
-# Automatically close this viewer after 24 hours; the collector stays active.
-exec timeout --signal=TERM --kill-after=2s 24h \
-    watch -c -n 2 augustus-temp
+# Event-aware snapshot viewer: redraw only when the collector publishes new data.
+# No additional sensor/SSH requests, no inotify-tools dependency.
+set -u
+
+CACHE="/run/augustus-temp/snapshot"
+VIEWER="/usr/local/bin/augustus-temp"
+POLL_SECONDS="${AUGUSTUS_WATCH_POLL:-1}"
+MAX_AGE="${AUGUSTUS_MAX_AGE:-45}"
+
+if [[ "${1:-}" != "--loop" ]]; then
+    # The 24h cap applies only to this terminal, not to the central collector.
+    exec timeout --signal=TERM --kill-after=2s 24h "$0" --loop
+fi
+
+last_signature=""
+last_stale=""
+while :; do
+    signature=$(stat -c '%i:%y' "$CACHE" 2>/dev/null) || signature="missing"
+    stale=0
+    if [[ "$signature" != "missing" ]]; then
+        timestamp=$(stat -c '%Y' "$CACHE" 2>/dev/null) || timestamp=0
+        age=$(( $(date +%s) - timestamp ))
+        if (( age > MAX_AGE )); then stale=1; fi
+    fi
+
+    # A new snapshot, first load, or transition to stale data triggers a redraw.
+    if [[ "$signature" != "$last_signature" || "$stale" != "$last_stale" ]]; then
+        printf '\033[H\033[2J'
+        "$VIEWER"
+        last_signature="$signature"
+        last_stale="$stale"
+    fi
+
+    sleep "$POLL_SECONDS"
+done
