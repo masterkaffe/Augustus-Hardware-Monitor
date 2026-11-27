@@ -61,27 +61,56 @@ in:
 
 On OpenWrt the script expects `ethtool`, hwmon support and SSH key authentication from Augustus.
 
-## Install
+## Installation und gleichzeitige Anzeige
 
-Clone the repository and run:
+Der Monitor besteht aus drei Teilen:
+
+1. `augustus-temp-collect` sammelt die Werte lokal auf `augustus`, inklusive SSH-Zugriff auf OpenWrt und die aktive GPU-VM.
+2. `augustus-temp-collector.timer` ruft den Collector regelmässig auf. Der systemd-Service hat ein festes Zeitlimit; ein hängender SSH-Prozess darf den Monitor nicht dauerhaft blockieren.
+3. `augustus-temp` zeigt ausschliesslich die letzte vollständige Momentaufnahme aus `/run/augustus-temp/snapshot` an, ohne selbst Hardware oder SSH abzufragen.
+
+Installation auf `augustus` als root:
 
 ```bash
 git clone https://github.com/masterkaffe/Augustus-Hardware-Monitor.git
 cd Augustus-Hardware-Monitor
-sudo ./install.sh
+./install.sh
 ```
 
-Then start it with:
+Bei bestehender Installation genügt `git pull && ./install.sh`, wenn keine lokalen Änderungen einen Konflikt verursachen.
+
+Einmalige Anzeige:
 
 ```bash
 augustus-temp
 ```
 
-For a continuously refreshing dashboard:
+Anzeige mit automatischem Ende nach 24 Stunden:
 
 ```bash
-watch -c -n2 augustus-temp
+augustus-watch
 ```
+
+Herkömmliches `watch -c -n2 augustus-temp` bleibt verfügbar, läuft aber ohne Zeitlimit. Die Option `AUGUSTUS_MAX_AGE=45` steuert die Warnschwelle für veraltete Momentaufnahmen.
+
+Mehrere Terminals können gleichzeitig zugreifen, auch über SSH aus anderen VMs:
+
+```bash
+ssh root@augustus augustus-temp
+```
+
+(Der SSH-Zugang muss bereits eingerichtet sein; Hostnamen/IP-Adressen können abweichen.)
+
+Collector-Zustand und Fehler:
+
+```bash
+systemctl status augustus-temp-collector.timer
+systemctl status augustus-temp-collector.service
+journalctl -u augustus-temp-collector.service -n 40 --no-pager
+```
+
+Der Collector wird nach Abschluss seiner Messung erneut geplant; bei SSH-Problemen dauert ein Aktualisierungszyklus deshalb länger als das lokale `watch`-Intervall. Der letzte gültige Snapshot bleibt sichtbar und wird bei Überschreitung des Alterslimits als veraltet gekennzeichnet. Die Snapshot-Datei wird atomar ausgetauscht.
+
 
 ## OpenWrt SSH
 
@@ -124,13 +153,7 @@ A red I/O bar means high utilization, not necessarily a hardware fault.
 
 ## Notes
 
-The dashboard stores short-lived counter state under:
-
-```text
-/run/augustus-temp/
-```
-
-This is used to calculate disk utilization and network throughput between refreshes.
+Kurzlebiger Zählerzustand, Cache und Locks liegen unter `/run/augustus-temp/`. Der Collector verarbeitet jeweils einen Messzyklus, während beliebig viele Anzeigeprozesse den Cache lesen. Die GPU-Messung nutzt `intel_gpu_top` für Engines und `nvtop -s` für VRAM, sofern verfügbar.
 
 ## License
 
