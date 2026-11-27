@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Automatically close this viewer after 24 hours; the collector stays active.
+exec timeout --signal=TERM --kill-after=2s 24h \
+    watch -c -n 2 augustus-temp
