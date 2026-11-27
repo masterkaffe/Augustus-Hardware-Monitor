@@ -1,0 +1,11 @@
+[Unit]
+Description=Augustus hardware telemetry collection
+After=network-online.target pve-cluster.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/augustus-temp-update
+TimeoutStartSec=35s
+TimeoutStopSec=3s
+KillMode=control-group
