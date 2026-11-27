@@ -1,0 +1,11 @@
+[Unit]
+Description=Periodic Augustus telemetry collection
+
+[Timer]
+OnBootSec=5s
+OnUnitInactiveSec=2s
+AccuracySec=1s
+Unit=augustus-temp-collector.service
+
+[Install]
+WantedBy=timers.target
