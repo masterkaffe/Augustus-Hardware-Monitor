@@ -85,13 +85,15 @@ Einmalige Anzeige:
 augustus-temp
 ```
 
-Anzeige mit automatischem Ende nach 24 Stunden:
+**Empfohlene Live-Anzeige (automatisches Ende nach 24 Stunden):**
 
 ```bash
 augustus-watch
 ```
 
-Herkömmliches `watch -c -n2 augustus-temp` bleibt verfügbar, läuft aber ohne Zeitlimit. Die Option `AUGUSTUS_MAX_AGE=45` steuert die Warnschwelle für veraltete Momentaufnahmen.
+`augustus-watch` prüft nur alle 1 Sekunde den Zeitstempel der Snapshot-Datei und zeichnet das Terminal **erst bei neuen Messwerten** neu. Es ruft weder GPU noch OpenWrt ab. Bei fehlenden oder veralteten Messwerten bleibt die letzte vollständige Anzeige sichtbar; der Warnhinweis wird bei Erreichen der Altersgrenze aktualisiert. Der Collector läuft unabhängig weiter. Optional lässt sich das Polling mit `AUGUSTUS_WATCH_POLL=2 augustus-watch` anpassen.
+
+Herkömmliches `watch -c -n2 augustus-temp` bleibt verfügbar, läuft aber ohne Zeitlimit und zeichnet auch unveränderte Werte neu. Die Option `AUGUSTUS_MAX_AGE=45` steuert die Warnschwelle für veraltete Momentaufnahmen.
 
 Mehrere Terminals können gleichzeitig zugreifen, auch über SSH aus anderen VMs:
 
@@ -109,7 +111,7 @@ systemctl status augustus-temp-collector.service
 journalctl -u augustus-temp-collector.service -n 40 --no-pager
 ```
 
-Der Collector wird nach Abschluss seiner Messung erneut geplant; bei SSH-Problemen dauert ein Aktualisierungszyklus deshalb länger als das lokale `watch`-Intervall. Der letzte gültige Snapshot bleibt sichtbar und wird bei Überschreitung des Alterslimits als veraltet gekennzeichnet. Die Snapshot-Datei wird atomar ausgetauscht.
+Der Collector wird nach Abschluss seiner Messung erneut geplant; bei SSH-Problemen kann ein Messzyklus länger dauern. Der letzte gültige Snapshot bleibt sichtbar und wird bei Überschreitung des Alterslimits als veraltet gekennzeichnet. Die Snapshot-Datei wird atomar ausgetauscht.
 
 
 ## OpenWrt SSH
